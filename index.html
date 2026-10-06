@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0A0E1A">
+<title>JARVIS — Assistive Vision</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+
+  :root {
+    --bg:      #0A0E1A;
+    --panel:   #131826;
+    --border:  #1F2740;
+    --text:    #F1F5F9;
+    --dim:     #8B95A8;
+    --go:      #10B981;
+    --warn:    #F59E0B;
+    --stop:    #EF4444;
+    --accent:  #3B82F6;
+  }
+
+  html, body {
+    background:var(--bg); color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    height:100dvh; overflow:hidden; overscroll-behavior:none;
+  }
+
+  #video {
+    position:fixed; inset:0; width:100%; height:100%;
+    object-fit:cover; z-index:0; opacity:0.22;
+    filter:grayscale(0.3);
+  }
+
+  .ui {
+    position:relative; z-index:1;
+    display:flex; flex-direction:column;
+    height:100%; padding:16px; gap:12px;
+  }
+
+  /* ---- top bar ---- */
+  .topbar {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:12px 16px; border-radius:14px;
+    background:var(--panel); border:1px solid var(--border);
+  }
+  .brand {
+    display:flex; align-items:center; gap:10px;
+    font-size:15px; font-weight:800; letter-spacing:2px;
+  }
+  .dot {
+    width:9px; height:9px; border-radius:50%;
+    background:var(--warn); box-shadow:0 0 10px currentColor;
+    transition:background 0.3s;
+  }
+  .dot.ok  { background:var(--go); }
+  .dot.err { background:var(--stop); }
+  .clock {
+    font-size:14px; font-weight:600; color:var(--dim);
+    font-variant-numeric:tabular-nums;
+  }
+
+  /* ---- status strip ---- */
+  #status {
+    font-size:14px; font-weight:700; letter-spacing:0.5px;
+    padding:11px 16px; border-radius:12px;
+    background:var(--panel); border:1px solid var(--border);
+    border-left:4px solid var(--warn);
+    display:flex; align-items:center; gap:10px;
+    min-height:44px;
+  }
+  #status::before {
+    content:''; width:8px; height:8px; border-radius:50%;
+    background:var(--warn); flex-shrink:0;
+  }
+  #status.ok   { border-left-color:var(--go); }
+  #status.ok::before   { background:var(--go); }
+  #status.err  { border-left-color:var(--stop); background:#1F0F12; }
+  #status.err::before  { background:var(--stop); }
+  #status.busy { border-left-color:var(--accent); }
+  #status.busy::before { background:var(--accent); animation:pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity:0.25; } }
+
+  /* ---- main readout ---- */
+  #output {
+    flex:1; display:flex; align-items:center; justify-content:center;
+    font-size:clamp(26px, 7.5vw, 56px);
+    font-weight:800; line-height:1.2; text-align:center;
+    padding:16px; transition:color 0.15s;
+  }
+
+  /* ---- button grid ---- */
+  .row { display:flex; gap:10px; }
+  button {
+    flex:1; padding:20px 8px;
+    font-size:16px; font-weight:800; letter-spacing:1px;
+    border:1px solid var(--border); border-radius:14px;
+    color:var(--text); background:var(--panel);
+    transition:transform 0.06s, background 0.15s, opacity 0.15s;
+    touch-action:manipulation;
+  }
+  button:active   { transform:scale(0.97); }
+  button:disabled { opacity:0.35; }
+
+  #btnScan {
+    flex:2; font-size:20px;
+    background:var(--go); border-color:var(--go); color:#04140D;
+  }
+  #btnLive.on { background:var(--accent); border-color:var(--accent); }
+  #btnStop    { background:#1F0F12; border-color:var(--stop); color:var(--stop); }
+  #btnRead    { background:var(--panel); }
+
+  /* ---- danger flash ---- */
+  #flash {
+    position:fixed; inset:0; background:var(--stop);
+    opacity:0; pointer-events:none; z-index:5;
+    transition:opacity 0.12s;
+  }
+  #flash.on { opacity:0.5; }
+
+  /* ---- footer ---- */
+  .footer {
+    font-size:11px; color:var(--dim); text-align:center;
+    letter-spacing:0.5px; padding-bottom:2px;
+  }
+</style>
+</head>
+<body>
+
+<video id="video" autoplay playsinline muted></video>
+<div id="flash"></div>
+
+<div class="ui">
+
+  <div class="topbar">
+    <div class="brand">
+      <span class="dot" id="dot"></span>
+      JARVIS
+    </div>
+    <div class="clock" id="clock">--:--:--</div>
+  </div>
+
+  <div id="status">Initialising camera…</div>
+
+  <div id="output">Ready</div>
+
+  <div class="row">
+    <button id="btnScan">SCAN</button>
+    <button id="btnLive">LIVE</button>
+  </div>
+  <div class="row">
+    <button id="btnRead">READ TEXT</button>
+    <button id="btnStop">STOP</button>
+  </div>
+
+  <div class="footer">Supportive prototype — not a certified navigation aid</div>
+
+</div>
+
+<script>
+/* ============================================================
+   CONFIG
+   ============================================================ */
+const API_KEY = 'PASTE_YOUR_GEMINI_API_KEY_HERE';
+const MODEL   = 'gemini-2.5-flash';
+const ENDPOINT =
+  `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+
+const PROMPT_SCENE =
+  'You are a navigation assistant for a blind person. ' +
+  'In under 20 words, describe what is directly in front of the camera ' +
+  'and any immediate obstacle. Be concrete and directional. No preamble.';
+
+const PROMPT_READ =
+  'Read aloud any text visible in this image. Output only the text. ' +
+  'If there is no text, reply exactly: No text found.';
+
+/* ============================================================
+   REFS + STATE
+   ============================================================ */
+const video    = document.getElementById('video');
+const statusEl = document.getElementById('status');
+const outputEl = document.getElementById('output');
+const flashEl  = document.getElementById('flash');
+const dotEl    = document.getElementById('dot');
+const clockEl  = document.getElementById('clock');
+const btnScan  = document.getElementById('btnScan');
+const btnLive  = document.getElementById('btnLive');
+const btnRead  = document.getElementById('btnRead');
+const btnStop  = document.getElementById('btnStop');
+
+let canvas, ctx;
+let liveTimer   = null;
+let busy        = false;
+let lastSpoken  = '';
+let cameraReady = false;
+
+const URGENT_WORDS = [
+  'stop','obstacle','danger','careful','step','hole','pit',
+  'car','vehicle','bike','motorcycle','edge','stairs','stair',
+  'curb','kerb','collision','wall','drop','traffic','moving'
+];
+
+/* ============================================================
+   UI
+   ============================================================ */
+function setStatus(text, cls = '') {
+  statusEl.textContent = text;
+  statusEl.className = cls;
+  dotEl.className = 'dot' + (cls === 'ok' ? ' ok' : cls === 'err' ? ' err' : '');
+}
+
+function setOutput(text, color = 'var(--text)') {
+  outputEl.textContent = text;
+  outputEl.style.color = color;
+}
+
+function flashDanger() {
+  flashEl.classList.add('on');
+  setTimeout(() => flashEl.classList.remove('on'), 700);
+}
+
+setInterval(() => {
+  const d = new Date();
+  clockEl.textContent =
+    [d.getHours(), d.getMinutes(), d.getSeconds()]
+      .map(n => String(n).padStart(2,'0')).join(':');
+}, 1000);
+
+/* ============================================================
+   SPEECH + HAPTICS
+   ============================================================ */
+function speak(text) {
+  if (!('speechSynthesis' in window)) return;
+  try { speechSynthesis.cancel(); } catch (e) {}
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = 1.0; u.pitch = 1.0; u.lang = 'en-IN'; u.volume = 1.0;
+  speechSynthesis.speak(u);
+}
+
+const hapticStop = () => navigator.vibrate && navigator.vibrate([400,100,400,100,400]);
+const hapticGo   = () => navigator.vibrate && navigator.vibrate(80);
+const hapticErr  = () => navigator.vibrate && navigator.vibrate([300,100,300,100,300]);
+
+const isUrgent = t =>
+  URGENT_WORDS.some(w => t.toLowerCase().includes(w));
+
+/* ============================================================
+   CAMERA
+   ============================================================ */
+async function startCamera() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus('Camera API unsupported — open in Chrome', 'err');
+    return false;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720} },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    await new Promise(r => video.videoWidth > 0 ? r() : (video.onloadedmetadata = r));
+
+    canvas = document.createElement('canvas');
+    ctx = canvas.getContext('2d');
+    cameraReady = true;
+    setStatus('Camera ready', 'ok');
+    setOutput('Ready', 'var(--go)');
+    return true;
+  } catch (e) {
+    setStatus('Camera blocked: ' + e.name, 'err');
+    setOutput('Allow camera access', 'var(--stop)');
+    return false;
+  }
+}
+
+/* ============================================================
+   CAPTURE + API
+   ============================================================ */
+function captureFrame(maxWidth = 1024, quality = 0.7) {
+  if (!cameraReady) throw new Error('Camera not ready');
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) throw new Error('No video signal');
+
+  const scale = Math.min(1, maxWidth / vw);
+  canvas.width  = Math.round(vw * scale);
+  canvas.height = Math.round(vh * scale);
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', quality).split(',')[1];
+}
+
+async function askGemini(base64Jpeg, prompt) {
+  const res = await fetch(`${ENDPOINT}?key=${API_KEY}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{
+        parts: [
+          { text: prompt },
+          { inline_data: { mime_type:'image/jpeg', data: base64Jpeg } }
+        ]
+      }],
+      generationConfig: { maxOutputTokens: 120, temperature: 0.4 }
+    })
+  });
+
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('Empty response');
+  return text.trim();
+}
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+function render(text) {
+  const urgent = isUrgent(text);
+  setOutput(text, urgent ? 'var(--stop)' : 'var(--text)');
+  urgent ? (flashDanger(), hapticStop()) : hapticGo();
+  if (text !== lastSpoken) { speak(text); lastSpoken = text; }
+}
+
+/* ============================================================
+   ACTIONS
+   ============================================================ */
+async function runScan(prompt = PROMPT_SCENE) {
+  if (busy || !cameraReady) return;
+  busy = true;
+  btnScan.disabled = btnRead.disabled = true;
+  setStatus('Scanning…', 'busy');
+
+  try {
+    const text = await askGemini(captureFrame(), prompt);
+    render(text);
+    setStatus('Camera ready', 'ok');
+  } catch (e) {
+    setStatus('Error: ' + e.message, 'err');
+    setOutput('Scan failed', 'var(--stop)');
+    hapticErr();
+  } finally {
+    busy = false;
+    btnScan.disabled = btnRead.disabled = false;
+  }
+}
+
+function toggleLive() {
+  if (liveTimer) {
+    clearInterval(liveTimer); liveTimer = null;
+    btnLive.textContent = 'LIVE';
+    btnLive.classList.remove('on');
+    setStatus('Continuous mode off', 'ok');
+    return;
+  }
+  btnLive.textContent = 'LIVE ON';
+  btnLive.classList.add('on');
+  setStatus('Continuous mode on', 'ok');
+  runScan(PROMPT_SCENE);
+  liveTimer = setInterval(() => runScan(PROMPT_SCENE), 4000);
+}
+
+function stopAll() {
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  btnLive.textContent = 'LIVE';
+  btnLive.classList.remove('on');
+  try { speechSynthesis.cancel(); } catch (e) {}
+  navigator.vibrate && navigator.vibrate(0);
+  flashEl.classList.remove('on');
+  setOutput('STOPPED', 'var(--stop)');
+  setStatus('Stopped');
+  hapticStop();
+}
+
+/* ============================================================
+   WIRE UP
+   ============================================================ */
+btnScan.addEventListener('click', () => runScan(PROMPT_SCENE));
+btnRead.addEventListener('click', () => runScan(PROMPT_READ));
+btnLive.addEventListener('click', toggleLive);
+btnStop.addEventListener('click', stopAll);
+
+outputEl.addEventListener('click', () => {
+  const t = outputEl.textContent.trim();
+  if (t && t !== 'Ready') speak(t);
+});
+
+document.body.addEventListener('click', async () => {
+  if (!document.fullscreenElement) {
+    try { await document.documentElement.requestFullscreen(); } catch (e) {}
+  }
+  if ('wakeLock' in navigator) {
+    try { await navigator.wakeLock.request('screen'); } catch (e) {}
+  }
+}, { once: true });
+
+document.body.addEventListener('touchstart', () => {
+  try {
+    const u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0; speechSynthesis.speak(u);
+  } catch (e) {}
+}, { once: true });
+
+window.addEventListener('load', startCamera);
+</script>
+</body>
+</html>
