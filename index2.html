@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0A0E1A">
+<title>JARVIS — Your Eyes</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+
+  :root {
+    --bg:      #0A0E1A;
+    --panel:   #131826;
+    --border:  #1F2740;
+    --text:    #F1F5F9;
+    --dim:     #8B95A8;
+    --go:      #10B981;
+    --warn:    #F59E0B;
+    --stop:    #EF4444;
+    --accent:  #3B82F6;
+    --listen:  #A855F7;
+  }
+
+  html, body {
+    background:var(--bg); color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    height:100dvh; overflow:hidden; overscroll-behavior:none;
+  }
+
+  #video {
+    position:fixed; inset:0; width:100%; height:100%;
+    object-fit:cover; z-index:0; opacity:0.22;
+    filter:grayscale(0.3);
+  }
+
+  .ui {
+    position:relative; z-index:1;
+    display:flex; flex-direction:column;
+    height:100%; padding:14px; gap:10px;
+  }
+
+  .topbar {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 14px; border-radius:14px;
+    background:var(--panel); border:1px solid var(--border);
+  }
+  .brand { display:flex; align-items:center; gap:10px;
+           font-size:14px; font-weight:800; letter-spacing:2px; }
+  .dot { width:9px; height:9px; border-radius:50%;
+         background:var(--warn); box-shadow:0 0 10px currentColor;
+         transition:background 0.3s; }
+  .dot.ok   { background:var(--go); }
+  .dot.err  { background:var(--stop); }
+  .dot.listen { background:var(--listen); animation:pulse 0.9s infinite; }
+  .clock { font-size:13px; font-weight:600; color:var(--dim);
+           font-variant-numeric:tabular-nums; }
+  @keyframes pulse { 50% { opacity:0.2; } }
+
+  #status {
+    font-size:13px; font-weight:700; letter-spacing:0.4px;
+    padding:10px 14px; border-radius:12px;
+    background:var(--panel); border:1px solid var(--border);
+    border-left:4px solid var(--warn);
+    display:flex; align-items:center; gap:10px; min-height:40px;
+  }
+  #status.ok   { border-left-color:var(--go); }
+  #status.err  { border-left-color:var(--stop); background:#1F0F12; }
+  #status.busy { border-left-color:var(--accent); }
+  #status.listen { border-left-color:var(--listen); background:#1A1029; }
+
+  #output {
+    flex:1; display:flex; align-items:center; justify-content:center;
+    font-size:clamp(24px, 6.8vw, 52px);
+    font-weight:800; line-height:1.22; text-align:center;
+    padding:14px; transition:color 0.15s;
+  }
+
+  .row { display:flex; gap:8px; }
+  button {
+    flex:1; padding:18px 6px;
+    font-size:15px; font-weight:800; letter-spacing:0.8px;
+    border:1px solid var(--border); border-radius:14px;
+    color:var(--text); background:var(--panel);
+    transition:transform 0.06s, background 0.15s, opacity 0.15s;
+    touch-action:manipulation;
+  }
+  button:active { transform:scale(0.97); }
+  button:disabled { opacity:0.35; }
+
+  #btnAsk {
+    flex:2; padding:26px 8px;
+    font-size:22px; letter-spacing:1.5px;
+    background:var(--listen); border-color:var(--listen); color:#fff;
+  }
+  #btnAsk.listening {
+    background:var(--stop); border-color:var(--stop);
+    animation:pulse 0.8s infinite;
+  }
+  #btnScene { background:var(--go); border-color:var(--go); color:#04140D; }
+  #btnLive.on { background:var(--accent); border-color:var(--accent); }
+  #btnStop { background:#1F0F12; border-color:var(--stop); color:var(--stop); }
+
+  #flash {
+    position:fixed; inset:0; background:var(--stop);
+    opacity:0; pointer-events:none; z-index:5; transition:opacity 0.12s;
+  }
+  #flash.on { opacity:0.5; }
+
+  #hearing {
+    position:fixed; bottom:0; left:0; right:0; z-index:6;
+    background:#1A1029; border-top:2px solid var(--listen);
+    padding:14px 18px; font-size:16px; color:#E9D5FF;
+    transform:translateY(100%); transition:transform 0.25s;
+    max-height:40vh; overflow-y:auto;
+  }
+  #hearing.on { transform:translateY(0); }
+  #hearing .label { font-size:11px; letter-spacing:2px;
+                    color:var(--listen); font-weight:800; margin-bottom:4px; }
+  #hearing .q { font-size:18px; font-weight:700; margin-bottom:8px; }
+
+  .footer { font-size:10px; color:var(--dim); text-align:center; letter-spacing:0.4px; }
+</style>
+</head>
+<body>
+
+<video id="video" autoplay playsinline muted></video>
+<div id="flash"></div>
+
+<div class="ui">
+  <div class="topbar">
+    <div class="brand"><span class="dot" id="dot"></span>JARVIS</div>
+    <div class="clock" id="clock">--:--:--</div>
+  </div>
+
+  <div id="status">Starting camera…</div>
+  <div id="output">Ready. Tap ASK to speak.</div>
+
+  <div class="row">
+    <button id="btnAsk">🎤  ASK</button>
+    <button id="btnScene">SCENE</button>
+  </div>
+  <div class="row">
+    <button id="btnLive">LIVE</button>
+    <button id="btnStop">STOP</button>
+  </div>
+
+  <div class="footer">Supportive prototype — not a certified navigation aid</div>
+</div>
+
+<div id="hearing">
+  <div class="label">HEARD</div>
+  <div class="q" id="heardText">—</div>
+</div>
+
+<script>
+/* ============================================================
+   CONFIG
+   ============================================================ */
+const API_KEY = 'AQ.Ab8RN6J254ptmbbPel-BVVYNpj3IaRoeyN3JDSDXaTVFdwNytA';
+const MODEL   = 'gemini-2.5-flash';
+const ENDPOINT =
+  `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+
+/* ============================================================
+   PROMPTS
+   ============================================================ */
+const SYSTEM_PERSONA =
+  'You are JARVIS, a warm, calm assistant for a blind person. ' +
+  'You can see through their phone camera. Speak in short, natural sentences ' +
+  'as if you are standing next to them describing what you see. ' +
+  'Never say "the image shows" or "I can see in the picture". ' +
+  'Just describe directly. Keep answers under 25 words unless asked for more. ' +
+  'Be specific about colour, position, distance, and movement.';
+
+const PROMPT_SCENE =
+  SYSTEM_PERSONA + ' Describe what is in front of the user right now. ' +
+  'Mention position (left/right/ahead), distance, and any immediate danger.';
+
+/* ============================================================
+   REFS
+   ============================================================ */
+const video     = document.getElementById('video');
+const statusEl  = document.getElementById('status');
+const outputEl  = document.getElementById('output');
+const flashEl   = document.getElementById('flash');
+const dotEl     = document.getElementById('dot');
+const clockEl   = document.getElementById('clock');
+const btnAsk    = document.getElementById('btnAsk');
+const btnScene  = document.getElementById('btnScene');
+const btnLive   = document.getElementById('btnLive');
+const btnStop   = document.getElementById('btnStop');
+const hearing   = document.getElementById('hearing');
+const heardText = document.getElementById('heardText');
+
+/* ============================================================
+   STATE
+   ============================================================ */
+let canvas, ctx;
+let liveTimer   = null;
+let busy        = false;
+let lastSpoken  = '';
+let cameraReady = false;
+let lastScene   = '';
+let recognition = null;
+let listening   = false;
+
+const URGENT_WORDS = [
+  'stop','obstacle','danger','careful','step','hole','pit',
+  'car','vehicle','bike','motorcycle','edge','stairs','stair',
+  'curb','kerb','collision','wall','drop','traffic','moving','approaching'
+];
+
+/* ============================================================
+   UI
+   ============================================================ */
+function setStatus(text, cls = '') {
+  statusEl.textContent = text;
+  statusEl.className = cls;
+  dotEl.className = 'dot' +
+    (cls === 'ok' ? ' ok' :
+     cls === 'err' ? ' err' :
+     cls === 'listen' ? ' listen' : '');
+}
+
+function setOutput(text, color = 'var(--text)') {
+  outputEl.textContent = text;
+  outputEl.style.color = color;
+}
+
+function flashDanger() {
+  flashEl.classList.add('on');
+  setTimeout(() => flashEl.classList.remove('on'), 700);
+}
+
+setInterval(() => {
+  const d = new Date();
+  clockEl.textContent =
+    [d.getHours(), d.getMinutes(), d.getSeconds()]
+      .map(n => String(n).padStart(2,'0')).join(':');
+}, 1000);
+
+/* ============================================================
+   SPEECH (output)
+   ============================================================ */
+function speak(text) {
+  if (!('speechSynthesis' in window)) return;
+  try { speechSynthesis.cancel(); } catch (e) {}
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = 1.0; u.pitch = 1.0; u.lang = 'en-IN'; u.volume = 1.0;
+  speechSynthesis.speak(u);
+}
+
+const hapticStop = () => navigator.vibrate && navigator.vibrate([400,100,400,100,400]);
+const hapticGo   = () => navigator.vibrate && navigator.vibrate(60);
+const hapticErr  = () => navigator.vibrate && navigator.vibrate([300,100,300,100,300]);
+const hapticListen = () => navigator.vibrate && navigator.vibrate([50,40,50]);
+
+const isUrgent = t => URGENT_WORDS.some(w => t.toLowerCase().includes(w));
+
+/* ============================================================
+   CAMERA
+   ============================================================ */
+async function startCamera() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus('Camera unsupported — open in Chrome', 'err'); return false;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720} },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    await new Promise(r => video.videoWidth > 0 ? r() : (video.onloadedmetadata = r));
+    canvas = document.createElement('canvas');
+    ctx = canvas.getContext('2d');
+    cameraReady = true;
+    setStatus('Camera ready', 'ok');
+    setOutput('Ready. Tap ASK to speak.', 'var(--go)');
+    return true;
+  } catch (e) {
+    setStatus('Camera blocked: ' + e.name, 'err');
+    setOutput('Allow camera access', 'var(--stop)');
+    return false;
+  }
+}
+
+/* ============================================================
+   FRAME + GEMINI
+   ============================================================ */
+function captureFrame(maxWidth = 1024, quality = 0.7) {
+  if (!cameraReady) throw new Error('Camera not ready');
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) throw new Error('No video signal');
+  const scale = Math.min(1, maxWidth / vw);
+  canvas.width  = Math.round(vw * scale);
+  canvas.height = Math.round(vh * scale);
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', quality).split(',')[1];
+}
+
+async function askGemini(base64Jpeg, prompt) {
+  const res = await fetch(`${ENDPOINT}?key=${API_KEY}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{
+        parts: [
+          { text: prompt },
+          { inline_data: { mime_type:'image/jpeg', data: base64Jpeg } }
+        ]
+      }],
+      generationConfig: { maxOutputTokens: 180, temperature: 0.6 }
+    })
+  });
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '');
+    throw new Error(`API ${res.status}: ${errBody.slice(0,120)}`);
+  }
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('Empty response');
+  return text.trim();
+}
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+function render(text) {
+  const urgent = isUrgent(text);
+  setOutput(text, urgent ? 'var(--stop)' : 'var(--text)');
+  urgent ? (flashDanger(), hapticStop()) : hapticGo();
+  if (text !== lastSpoken) { speak(text); lastSpoken = text; }
+}
+
+/* ============================================================
+   MAIN ACTIONS
+   ============================================================ */
+async function runScene() {
+  if (busy || !cameraReady) return;
+  busy = true; btnScene.disabled = true; btnAsk.disabled = true;
+  setStatus('Looking around…', 'busy');
+  try {
+    const text = await askGemini(captureFrame(), PROMPT_SCENE);
+    lastScene = text;
+    render(text);
+    setStatus('Camera ready', 'ok');
+  } catch (e) {
+    setStatus('Error: ' + e.message, 'err');
+    setOutput('Could not scan', 'var(--stop)');
+    hapticErr();
+  } finally {
+    busy = false; btnScene.disabled = false; btnAsk.disabled = false;
+  }
+}
+
+async function runQuestion(question) {
+  if (busy || !cameraReady) return;
+  busy = true; btnAsk.disabled = true; btnScene.disabled = true;
+  setStatus('Thinking…', 'busy');
+  try {
+    const prompt =
+      SYSTEM_PERSONA +
+      (lastScene ? ' Current context: ' + lastScene + '.' : '') +
+      ' The user just asked: "' + question + '". ' +
+      'Answer them directly and briefly, describing what you see.';
+    const text = await askGemini(captureFrame(), prompt);
+    render(text);
+    setStatus('Camera ready', 'ok');
+  } catch (e) {
+    setStatus('Error: ' + e.message, 'err');
+    setOutput('Could not answer', 'var(--stop)');
+    hapticErr();
+  } finally {
+    busy = false; btnAsk.disabled = false; btnScene.disabled = false;
+  }
+}
+
+function toggleLive() {
+  if (liveTimer) {
+    clearInterval(liveTimer); liveTimer = null;
+    btnLive.textContent = 'LIVE';
+    btnLive.classList.remove('on');
+    setStatus('Continuous mode off', 'ok');
+    return;
+  }
+  btnLive.textContent = 'LIVE ON';
+  btnLive.classList.add('on');
+  setStatus('Continuous mode on', 'ok');
+  runScene();
+  liveTimer = setInterval(runScene, 5000);
+}
+
+function stopAll() {
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  if (recognition && listening) { try { recognition.stop(); } catch(e){} }
+  btnLive.textContent = 'LIVE'; btnLive.classList.remove('on');
+  btnAsk.classList.remove('listening'); btnAsk.textContent = '🎤  ASK';
+  hearing.classList.remove('on');
+  try { speechSynthesis.cancel(); } catch (e) {}
+  navigator.vibrate && navigator.vibrate(0);
+  flashEl.classList.remove('on');
+  setOutput('STOPPED', 'var(--stop)');
+  setStatus('Stopped');
+  hapticStop();
+}
+
+/* ============================================================
+   VOICE INPUT (Web Speech API)
+   ============================================================ */
+function initRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return null;
+  const r = new SR();
+  r.lang = 'en-IN';
+  r.continuous = false;
+  r.interimResults = true;
+  r.maxAlternatives = 1;
+
+  r.onstart = () => {
+    listening = true;
+    btnAsk.classList.add('listening');
+    btnAsk.textContent = '⏹  LISTENING';
+    setStatus('Listening… speak now', 'listen');
+    hearing.classList.add('on');
+    heardText.textContent = '…';
+    hapticListen();
+  };
+
+  r.onresult = (ev) => {
+    let interim = '', final = '';
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      const t = ev.results[i][0].transcript;
+      if (ev.results[i].isFinal) final += t; else interim += t;
+    }
+    heardText.textContent = final || interim || '…';
+    if (final.trim()) {
+      const q = final.trim();
+      try { r.stop(); } catch(e){}
+      setTimeout(() => runQuestion(q), 250);
+    }
+  };
+
+  r.onerror = (ev) => {
+    listening = false;
+    btnAsk.classList.remove('listening');
+    btnAsk.textContent = '🎤  ASK';
+    setStatus('Voice error: ' + ev.error, 'err');
+    hearing.classList.remove('on');
+    hapticErr();
+  };
+
+  r.onend = () => {
+    listening = false;
+    btnAsk.classList.remove('listening');
+    btnAsk.textContent = '🎤  ASK';
+    setTimeout(() => hearing.classList.remove('on'), 800);
+  };
+
+  return r;
+}
+
+function toggleListen() {
+  if (!recognition) {
+    setStatus('Voice input not supported — use Chrome', 'err');
+    return;
+  }
+  if (listening) { try { recognition.stop(); } catch(e){} return; }
+  try { recognition.start(); } catch (e) { setStatus('Mic error: ' + e.message, 'err'); }
+}
+
+/* ============================================================
+   WIRE UP
+   ============================================================ */
+recognition = initRecognition();
+
+btnAsk.addEventListener('click', toggleListen);
+btnScene.addEventListener('click', runScene);
+btnLive.addEventListener('click', toggleLive);
+btnStop.addEventListener('click', stopAll);
+
+outputEl.addEventListener('click', () => {
+  const t = outputEl.textContent.trim();
+  if (t && !t.startsWith('Ready')) speak(t);
+});
+
+document.body.addEventListener('click', async () => {
+  if (!document.fullscreenElement) {
+    try { await document.documentElement.requestFullscreen(); } catch (e) {}
+  }
+  if ('wakeLock' in navigator) {
+    try { await navigator.wakeLock.request('screen'); } catch (e) {}
+  }
+}, { once: true });
+
+document.body.addEventListener('touchstart', () => {
+  try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch (e) {}
+}, { once: true });
+
+window.addEventListener('load', startCamera);
+</script>
+</body>
+</html>
